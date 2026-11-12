@@ -1,0 +1,97 @@
+# Pipeline de CI para serviços Java/Spring do golden path (equivale a um "stage").
+# Cada job compõe steps reutilizáveis de actions/ (equivalem aos "steps").
+#
+# Uso no repo do serviço:
+#   jobs:
+#     ci:
+#       uses: gerffeson-lab/platform-pipelines-templates/.github/workflows/ci-java.yaml@v1
+#
+# As actions são referenciadas pela tag de major (@v1), que o release move junto.
+# Numa versão v2, atualizar estas referências para @v2.
+name: ci-java
+
+on:
+  workflow_call:
+    inputs:
+      java-version:
+        description: Versão do Java
+        type: string
+        default: '21'
+      openapi-path:
+        description: Caminho do contrato OpenAPI
+        type: string
+        default: api/openapi.yaml
+      publish-image:
+        description: Publica a imagem em push para develop, release/*, main e tags
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    name: contrato OpenAPI
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gerffeson-lab/platform-pipelines-templates/actions/openapi/lint@v1
+        with:
+          spec: ${{ inputs.openapi-path }}
+      - if: github.event_name == 'pull_request'
+        uses: gerffeson-lab/platform-pipelines-templates/actions/openapi/breaking-changes@v1
+        with:
+          spec: ${{ inputs.openapi-path }}
+          base-ref: ${{ github.base_ref }}
+
+  secrets:
+    name: secret scanning
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gerffeson-lab/platform-pipelines-templates/actions/security/secret-scan@v1
+
+  build:
+    name: build e testes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: gerffeson-lab/platform-pipelines-templates/actions/java/maven-build@v1
+        with:
+          java-version: ${{ inputs.java-version }}
+      - uses: gerffeson-lab/platform-pipelines-templates/actions/security/sbom@v1
+
+  dependencies:
+    name: SCA (dependency review)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: high
+
+  image:
+    name: imagem
+    needs: [contract, secrets, build]
+    if: inputs.publish-image && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: app-jar
+          path: target
+      - uses: gerffeson-lab/platform-pipelines-templates/actions/container/build-push@v1
+        with:
+          image: ${{ github.repository }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+  # Fase 2: renderizar o Helm (helm-library) e commitar no repo gitops-<produto>.

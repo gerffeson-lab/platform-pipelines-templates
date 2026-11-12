@@ -1,0 +1,26 @@
+# Release deste repositório: a cada merge na main, testa e, se houver feat/fix/breaking,
+# cria a nova versão e move a tag de major (v1) usada pelos serviços.
+name: release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  test:
+    uses: ./.github/workflows/test.yaml
+
+  release:
+    needs: test
+    uses: ./.github/workflows/release-semver.yaml
+    permissions:
+      contents: write
+    with:
+      move-major-tag: true

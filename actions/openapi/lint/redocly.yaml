@@ -1,0 +1,11 @@
+# Ruleset padrão da plataforma para contratos OpenAPI.
+# No banco, o conteúdo é definido pela Arquitetura; a plataforma só distribui e versiona.
+extends:
+  - recommended
+
+rules:
+  paths-kebab-case: error
+  operation-4xx-response: error
+  info-license: off
+  info-license-strict: off
+  security-defined: off # depende do GT Autenticação; reativar quando o padrão existir

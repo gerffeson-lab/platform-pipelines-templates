@@ -1,0 +1,79 @@
+# Release semântica automática a partir dos Conventional Commits (equivale ao release-it).
+# Não commita nada de volta na branch (compatível com rulesets): a versão vira tag e as
+# notas vão para a GitHub Release.
+#
+# Uso (em push na branch de release, depois dos testes):
+#   jobs:
+#     release:
+#       uses: gerffeson-lab/platform-pipelines-templates/.github/workflows/release-semver.yaml@v1
+#       permissions:
+#         contents: write
+#
+# Tags criadas com o GITHUB_TOKEN não disparam outros workflows. Se o repo precisar
+# reagir à tag (ex.: build da imagem versionada), passe um token da GitHub App em
+# secrets.token.
+name: release-semver
+
+on:
+  workflow_call:
+    inputs:
+      move-major-tag:
+        description: Move a tag de major (v1) para a nova versão
+        type: boolean
+        default: false
+      initial-version:
+        description: Versão da primeira release
+        type: string
+        default: 1.0.0
+    secrets:
+      token:
+        description: Token para criar tag e release (padrão GITHUB_TOKEN)
+        required: false
+    outputs:
+      released:
+        description: "true se uma release foi criada"
+        value: ${{ jobs.release.outputs.released }}
+      tag:
+        description: Tag criada
+        value: ${{ jobs.release.outputs.tag }}
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    outputs:
+      released: ${{ steps.next.outputs.released }}
+      tag: ${{ steps.next.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.token || github.token }}
+
+      - id: next
+        uses: gerffeson-lab/platform-pipelines-templates/actions/release/next-version@v1
+        with:
+          initial-version: ${{ inputs.initial-version }}
+
+      - name: Criar tag e release
+        if: steps.next.outputs.released == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.token || github.token }}
+          TAG: ${{ steps.next.outputs.tag }}
+          NOTES: ${{ steps.next.outputs.notes-file }}
+          MOVE_MAJOR: ${{ inputs.move-major-tag }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "Release $TAG"
+          git push origin "refs/tags/$TAG"
+          gh release create "$TAG" --verify-tag --title "$TAG" --notes-file "$NOTES"
+          if [ "$MOVE_MAJOR" = "true" ]; then
+            major="${TAG%%.*}"
+            git tag -fa "$major" -m "Aponta para $TAG" "$TAG^{}"
+            git push -f origin "refs/tags/$major"
+          fi
+          echo "### Release $TAG" >> "$GITHUB_STEP_SUMMARY"
+          cat "$NOTES" >> "$GITHUB_STEP_SUMMARY"

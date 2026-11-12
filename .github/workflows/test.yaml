@@ -1,0 +1,68 @@
+# Auto-teste dos templates, chamado pelo pr.yaml e pelo release.yaml.
+# As actions são usadas pelo caminho local (./actions/...), ou seja, a versão em teste.
+name: test
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  lint-workflows:
+    name: actionlint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: actionlint
+        run: docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.7 -color
+
+  openapi:
+    name: actions de OpenAPI
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: lint aprova contrato válido
+        uses: ./actions/openapi/lint
+        with:
+          spec: tests/fixtures/openapi/base.yaml
+
+      - name: mudança compatível passa
+        uses: ./actions/openapi/breaking-changes
+        with:
+          base-spec: tests/fixtures/openapi/base.yaml
+          spec: tests/fixtures/openapi/compatible.yaml
+
+      - name: mudança que quebra é detectada
+        id: breaking
+        continue-on-error: true
+        uses: ./actions/openapi/breaking-changes
+        with:
+          base-spec: tests/fixtures/openapi/base.yaml
+          spec: tests/fixtures/openapi/breaking.yaml
+
+      - name: conferir que a quebra falhou
+        env:
+          OUTCOME: ${{ steps.breaking.outcome }}
+        run: |
+          if [ "$OUTCOME" != "failure" ]; then
+            echo "::error::A action deveria ter falhado com o contrato breaking.yaml."
+            exit 1
+          fi
+
+  secret-scan:
+    name: action de secret scanning
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: ./actions/security/secret-scan
+
+  next-version:
+    name: cálculo de versão semântica
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash tests/release/next-version.test.sh

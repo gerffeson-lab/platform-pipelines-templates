@@ -1,0 +1,52 @@
+name: openapi-breaking-changes
+description: >-
+  Falha se o contrato tiver mudança que quebra consumidores (oasdiff). A base vem de um
+  arquivo (base-spec) ou do mesmo caminho em outra branch (base-ref). Exige checkout com
+  fetch-depth 0 quando usar base-ref.
+
+inputs:
+  spec:
+    description: Contrato da revisão atual
+    default: api/openapi.yaml
+  base-ref:
+    description: "Branch de comparação (ex.: develop). Ignorado se base-spec for informado"
+    default: ''
+  base-spec:
+    description: Arquivo do contrato de comparação
+    default: ''
+  fail-on:
+    description: Severidade mínima que falha (ERR ou WARN)
+    default: ERR
+  oasdiff-version:
+    description: Tag da imagem tufin/oasdiff
+    default: v1.37.0
+
+runs:
+  using: composite
+  steps:
+    - name: Breaking changes (oasdiff)
+      shell: bash
+      env:
+        SPEC: ${{ inputs.spec }}
+        BASE_REF: ${{ inputs.base-ref }}
+        BASE_SPEC: ${{ inputs.base-spec }}
+        FAIL_ON: ${{ inputs.fail-on }}
+        OASDIFF_VERSION: ${{ inputs.oasdiff-version }}
+      run: |
+        if [ -z "$BASE_SPEC" ]; then
+          if [ -z "$BASE_REF" ]; then
+            echo "::error::Informe base-spec ou base-ref."
+            exit 1
+          fi
+          if ! git cat-file -e "origin/$BASE_REF:$SPEC" 2>/dev/null; then
+            echo "Contrato novo em relação a $BASE_REF; nada para comparar."
+            exit 0
+          fi
+          BASE_SPEC="$RUNNER_TEMP/base-openapi.yaml"
+          git show "origin/$BASE_REF:$SPEC" > "$BASE_SPEC"
+        fi
+        base_dir=$(dirname "$(realpath "$BASE_SPEC")")
+        rev_dir=$(dirname "$(realpath "$SPEC")")
+        docker run --rm -v "$base_dir:/base:ro" -v "$rev_dir:/rev:ro" "tufin/oasdiff:$OASDIFF_VERSION" \
+          breaking "/base/$(basename "$BASE_SPEC")" "/rev/$(basename "$SPEC")" \
+          --fail-on "$FAIL_ON" --format githubactions

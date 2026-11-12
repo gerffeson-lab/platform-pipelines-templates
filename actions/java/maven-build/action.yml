@@ -1,0 +1,37 @@
+name: maven-build
+description: >-
+  Build e testes com Maven (mvn verify) e publica o JAR como artifact do run.
+
+inputs:
+  java-version:
+    description: Versão do Java
+    default: '21'
+  maven-goals:
+    description: Goals do Maven
+    default: verify
+  artifact-name:
+    description: Nome do artifact com o JAR
+    default: app-jar
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-java@v4
+      with:
+        distribution: temurin
+        java-version: ${{ inputs.java-version }}
+        cache: maven
+
+    - name: mvn ${{ inputs.maven-goals }}
+      shell: bash
+      env:
+        GOALS: ${{ inputs.maven-goals }}
+      run: |
+        read -ra goals <<< "$GOALS"
+        mvn -B -ntp "${goals[@]}"
+
+    - uses: actions/upload-artifact@v4
+      with:
+        name: ${{ inputs.artifact-name }}
+        path: target/*.jar
+        retention-days: 7

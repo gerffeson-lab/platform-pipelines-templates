@@ -1,0 +1,66 @@
+openapi: 3.0.3
+info:
+  title: fixture
+  version: 1.0.0
+  description: |
+    Contrato de exemplo do template. Substitua pelo contrato do seu serviço:
+    o contrato vem primeiro (API First) e o código Java é gerado a partir dele.
+  contact:
+    name: Engenharia de Plataforma
+servers:
+  - url: /
+    description: Mesmo host do serviço (o endereço real depende do ambiente)
+tags:
+  - name: hello
+    description: Endpoint de exemplo
+paths:
+  /v1/hello:
+    get:
+      tags: [hello]
+      operationId: getHello
+      summary: Retorna uma saudação
+      description: Endpoint de exemplo para validar a esteira de ponta a ponta.
+      parameters:
+        - name: name
+          in: query
+          required: false
+          description: Nome de quem será saudado
+          schema:
+            type: string
+            maxLength: 50
+      responses:
+        '200':
+          description: Saudação gerada
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HelloResponse'
+        '400':
+          description: Requisição inválida
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+components:
+  schemas:
+    HelloResponse:
+      type: object
+      required: [message]
+      properties:
+        message:
+          type: string
+          example: Olá, Ana!
+    Problem:
+      description: Erro no formato RFC 9457 (Problem Details)
+      type: object
+      properties:
+        type:
+          type: string
+        title:
+          type: string
+        status:
+          type: integer
+        detail:
+          type: string
+        instance:
+          type: string

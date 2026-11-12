@@ -1,0 +1,31 @@
+# Valida que o título do PR segue Conventional Commits. Com squash merge, o título vira a
+# mensagem do commit na branch, e é dele que o release-semver calcula a versão.
+name: lint-pr-title
+
+on:
+  workflow_call:
+
+permissions:
+  pull-requests: read
+
+jobs:
+  pr-title:
+    name: título do PR (Conventional Commits)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validar título
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          re='^(feat|fix|perf|refactor|docs|test|build|ci|chore|style|revert)(\([a-z0-9._/-]+\))?!?: .+'
+          if [[ ! "$TITLE" =~ $re ]]; then
+            {
+              echo "::error::Título fora do padrão Conventional Commits: \"$TITLE\""
+              echo "Use <tipo>(escopo opcional): descrição. Exemplos:"
+              echo "  feat(openapi): adiciona regra de versionamento"
+              echo "  fix: corrige cache do maven"
+              echo "  feat!: remove input publish-image   (mudança que quebra = nova major)"
+            } >&2
+            exit 1
+          fi
+          echo "OK: $TITLE"

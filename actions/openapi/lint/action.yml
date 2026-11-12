@@ -1,0 +1,32 @@
+name: openapi-lint
+description: >-
+  Lint do contrato OpenAPI com Redocly. Usa o redocly.yaml do repositório, se existir;
+  senão, aplica o ruleset padrão da plataforma (redocly.yaml ao lado desta action).
+
+inputs:
+  spec:
+    description: Caminho do contrato
+    default: api/openapi.yaml
+  config:
+    description: Ruleset do Redocly. Vazio usa o do repositório ou o padrão da plataforma
+    default: ''
+  redocly-version:
+    description: Versão do @redocly/cli
+    default: 2.77.0
+
+runs:
+  using: composite
+  steps:
+    - name: Lint do contrato (Redocly)
+      shell: bash
+      env:
+        SPEC: ${{ inputs.spec }}
+        CONFIG: ${{ inputs.config }}
+        REDOCLY_VERSION: ${{ inputs.redocly-version }}
+        PLATFORM_CONFIG: ${{ github.action_path }}/redocly.yaml
+      run: |
+        if [ -z "$CONFIG" ]; then
+          if [ -f redocly.yaml ]; then CONFIG=redocly.yaml; else CONFIG="$PLATFORM_CONFIG"; fi
+        fi
+        echo "Ruleset: $CONFIG"
+        npx --yes "@redocly/cli@$REDOCLY_VERSION" lint "$SPEC" --config "$CONFIG" --format=github-actions

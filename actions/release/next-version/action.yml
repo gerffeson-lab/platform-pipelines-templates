@@ -1,0 +1,33 @@
+name: next-version
+description: >-
+  Calcula a próxima versão semântica a partir dos Conventional Commits desde a última tag
+  vX.Y.Z (feat = minor, fix/perf = patch, "!" ou BREAKING CHANGE = major) e gera as notas
+  da release. Exige checkout com fetch-depth 0.
+
+inputs:
+  initial-version:
+    description: Versão da primeira release, quando ainda não há tag
+    default: 1.0.0
+
+outputs:
+  released:
+    description: "true se há mudança que gera release"
+    value: ${{ steps.calc.outputs.released }}
+  version:
+    description: "Versão calculada (ex.: 1.4.0)"
+    value: ${{ steps.calc.outputs.version }}
+  tag:
+    description: "Tag calculada (ex.: v1.4.0)"
+    value: ${{ steps.calc.outputs.tag }}
+  notes-file:
+    description: Arquivo com as notas da release em Markdown
+    value: ${{ steps.calc.outputs.notes-file }}
+
+runs:
+  using: composite
+  steps:
+    - id: calc
+      shell: bash
+      env:
+        INITIAL_VERSION: ${{ inputs.initial-version }}
+      run: bash "$GITHUB_ACTION_PATH/next-version.sh" >> "$GITHUB_OUTPUT"

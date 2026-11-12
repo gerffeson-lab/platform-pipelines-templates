@@ -1,0 +1,22 @@
+name: sbom
+description: >-
+  Gera o SBOM (CycloneDX) do repositório e publica como artifact do run.
+  No banco, este passo troca para a ferramenta de SCA/SBOM definida por Segurança.
+
+inputs:
+  path:
+    description: Diretório analisado
+    default: .
+  artifact-name:
+    description: Nome do artifact do SBOM
+    default: sbom.cdx.json
+
+runs:
+  using: composite
+  steps:
+    - name: SBOM (CycloneDX)
+      uses: anchore/sbom-action@v0
+      with:
+        path: ${{ inputs.path }}
+        format: cyclonedx-json
+        artifact-name: ${{ inputs.artifact-name }}
