@@ -1,7 +1,8 @@
 name: container-build-push
 description: >-
-  Build da imagem (Dockerfile do repositório) e push para o registry, com tags por
-  branch, versão semântica e SHA. Na POC é o ghcr.io; no banco, o Quay.
+  Build da imagem (Dockerfile do repositório), scan de vulnerabilidades da imagem (Grype,
+  inclui os pacotes do sistema operacional da imagem base) e, se aprovada, push para o
+  registry com tags por branch, versão semântica e SHA. Na POC é o ghcr.io; no banco, o Quay.
 
 inputs:
   registry:
@@ -19,6 +20,15 @@ inputs:
   context:
     description: Contexto do build
     default: .
+  scan:
+    description: Faz o scan da imagem antes do push
+    default: 'true'
+  fail-on:
+    description: >-
+      Severidade mínima que bloqueia o push (com correção disponível). Padrão "none" (só
+      relatório) até existir a imagem base curada pela plataforma: hoje as vulnerabilidades da
+      imagem vêm dos pacotes do sistema da base, que o time do serviço não consegue corrigir
+    default: none
 
 outputs:
   digest:
@@ -40,13 +50,32 @@ runs:
           type=semver,pattern={{version}}
           type=sha,prefix=sha-
 
+    - uses: docker/setup-buildx-action@v3
+
+    # Build local para o scan; o push reaproveita o cache do builder
+    - if: inputs.scan == 'true'
+      uses: docker/build-push-action@v6
+      with:
+        context: ${{ inputs.context }}
+        load: true
+        tags: imagem-em-analise:local
+
+    - if: inputs.scan == 'true'
+      shell: bash
+      run: docker save imagem-em-analise:local -o "$RUNNER_TEMP/imagem.tar"
+
+    - if: inputs.scan == 'true'
+      uses: gerffeson-lab/platform-pipelines-templates/actions/security/sca@v1
+      with:
+        target: ${{ runner.temp }}/imagem.tar
+        type: docker-archive
+        fail-on: ${{ inputs.fail-on }}
+
     - uses: docker/login-action@v3
       with:
         registry: ${{ inputs.registry }}
         username: ${{ inputs.username }}
         password: ${{ inputs.password }}
-
-    - uses: docker/setup-buildx-action@v3
 
     - id: build
       uses: docker/build-push-action@v6

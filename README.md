@@ -7,6 +7,7 @@ repositório por versão.
 jobs:
   ci:
     uses: gerffeson-lab/platform-pipelines-templates/.github/workflows/ci-java.yaml@v1
+    secrets: inherit
 ```
 
 ## Estrutura
@@ -26,9 +27,11 @@ actions/
   openapi/lint                 # Redocly, ruleset padrão da plataforma
   openapi/breaking-changes     # oasdiff contra a branch de destino
   security/secret-scan         # Gitleaks
-  security/sbom                # CycloneDX
+  security/sbom                # Syft, CycloneDX
+  security/sca                 # Grype sobre o SBOM ou a imagem
+  sonar/maven                  # SAST + quality gate (SonarQube/SonarCloud)
   java/maven-build             # mvn verify + JAR como artifact
-  container/build-push         # tags por branch/semver/sha e push
+  container/build-push         # build, scan da imagem, tags por branch/semver/sha e push
   release/next-version         # versão semântica por Conventional Commits
 ```
 
@@ -39,12 +42,43 @@ actions/
 | contrato OpenAPI | sempre | Lint com Redocly (`redocly.yaml` do serviço ou o padrão da plataforma) | sim |
 | | PR | Breaking change contra a branch de destino (oasdiff) | sim |
 | secret scanning | sempre | Gitleaks no histórico | sim |
-| build e testes | sempre | `mvn verify` + SBOM CycloneDX | sim |
-| SCA | PR | Dependency review (falha em severidade alta) | sim |
-| imagem | push em develop, release/*, main e tags | Build e push para o registry | — |
+| build, testes e SAST | sempre | `mvn verify` com cobertura (JaCoCo, ligado pela esteira) | sim |
+| | sempre | **SAST** no Sonar, esperando o quality gate | sim |
+| | sempre | **SBOM** CycloneDX do JAR final (artifact `sbom`, 90 dias) | — |
+| SCA | sempre | **Grype** sobre o SBOM: severidade alta ou maior com correção disponível | sim |
+| imagem | push em develop, release/*, main e tags | Build, **scan da imagem** (Grype) e push para o registry | scan só relata (veja abaixo) |
 
 Entradas: `java-version` (padrão `21`), `openapi-path` (padrão `api/openapi.yaml`),
-`publish-image` (padrão `true`).
+`publish-image` (padrão `true`), `sonar-project-key` (padrão `<dono>_<repositório>`).
+
+### Configuração (na org, não no serviço)
+
+| Tipo | Nome | Valor |
+|---|---|---|
+| Secret | `SONAR_TOKEN` | Token do SonarQube/SonarCloud. **Obrigatório**: sem ele o build falha |
+| Variável | `SONAR_HOST_URL` | Padrão `https://sonarcloud.io` |
+| Variável | `SONAR_ORGANIZATION` | Só no SonarCloud |
+
+O serviço chama a esteira com `secrets: inherit`. As regras do quality gate (ex.: cobertura
+em código novo) ficam no Sonar, não no repositório do serviço.
+
+### Por que o scan da imagem ainda não bloqueia
+
+As vulnerabilidades da imagem vêm dos pacotes do sistema operacional da imagem base (UBI),
+que o time do serviço não consegue corrigir. Hoje a própria `ubi9/openjdk-21-runtime` mais
+recente tem vulnerabilidades altas com correção disponível. Bloquear agora travaria todos os
+serviços. O caminho é a plataforma manter uma **imagem base curada** (reconstruída com os
+patches, com scan próprio); quando ela existir, o padrão do `fail-on` da imagem passa para
+`high`. O SCA da aplicação, que o time corrige, já bloqueia.
+
+### SBOM
+
+Hoje fica como artifact do run (90 dias). Para valer além do CI:
+
+1. Anexar à imagem no registry como attestation (cosign/OCI), para o SBOM viajar com a imagem
+   que vai para produção.
+2. Enviar para uma ferramenta de gestão de vulnerabilidades (Dependency-Track, Tenable...),
+   que reavalia os SBOMs quando sai uma CVE nova, sem precisar rodar o CI de novo.
 
 ## Versionamento (automático)
 
@@ -87,6 +121,8 @@ jobs:
 | ghcr.io | Quay (com scan de imagem) |
 | Runners hospedados pelo GitHub | Runners self-hosted (ARC no OpenShift), com acesso à rede interna |
 | Actions públicas referenciadas direto | Allowlist do Enterprise ou espelho interno das actions de terceiros |
-| Dependency review do GitHub | Ferramenta de SCA/SBOM definida por Segurança |
-| — | SonarQube quality gate |
+| Dependências direto do Maven Central | Nexus (proxy do Central e libs internas) |
+| Grype (SCA e imagem), Syft (SBOM) | Os mesmos, ou a ferramenta definida por Segurança (ex.: Tenable) |
+| SonarCloud | SonarQube quality gate |
+| Imagem base UBI pública | Imagem base curada pela plataforma, com scan bloqueante |
 | `ci.yaml` copiado do template | Required workflow via ruleset da org: o CI roda mesmo se o time removê-lo |

@@ -60,6 +60,75 @@ jobs:
           fetch-depth: 0
       - uses: ./actions/security/secret-scan
 
+  sbom-sca:
+    name: actions de SBOM e SCA
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: SBOM de um diretório
+        id: sbom
+        uses: ./actions/security/sbom
+        with:
+          target: tests/fixtures/openapi
+          output: ${{ runner.temp }}/sbom/teste.cdx.json
+          artifact-name: ''
+
+      - name: conferir o SBOM
+        env:
+          SBOM: ${{ steps.sbom.outputs.path }}
+        run: python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["bomFormat"] == "CycloneDX", d' "$SBOM"
+
+      - name: SBOM sem vulnerabilidade passa
+        uses: ./actions/security/sca
+        with:
+          target: tests/fixtures/sca/limpo.cdx.json
+
+      - name: dependência vulnerável (log4j 2.14.1) é bloqueada
+        id: vulneravel
+        continue-on-error: true
+        uses: ./actions/security/sca
+        with:
+          target: tests/fixtures/sca/vulneravel.cdx.json
+
+      - name: no modo só relatório, a mesma dependência não bloqueia
+        uses: ./actions/security/sca
+        with:
+          target: tests/fixtures/sca/vulneravel.cdx.json
+          fail-on: none
+
+      - name: conferir que o bloqueio falhou
+        env:
+          OUTCOME: ${{ steps.vulneravel.outcome }}
+        run: |
+          if [ "$OUTCOME" != "failure" ]; then
+            echo "::error::O SCA deveria ter bloqueado o log4j 2.14.1."
+            exit 1
+          fi
+
+  sonar:
+    name: action do Sonar
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: sem token, o SAST obrigatório falha
+        id: sem-token
+        continue-on-error: true
+        uses: ./actions/sonar/maven
+        with:
+          token: ''
+          project-key: teste
+
+      - name: conferir que falhou
+        env:
+          OUTCOME: ${{ steps.sem-token.outcome }}
+        run: |
+          if [ "$OUTCOME" != "failure" ]; then
+            echo "::error::A action do Sonar deveria falhar sem token."
+            exit 1
+          fi
+
   next-version:
     name: cálculo de versão semântica
     runs-on: ubuntu-latest

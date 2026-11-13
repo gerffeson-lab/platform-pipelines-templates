@@ -1,6 +1,8 @@
 name: maven-build
 description: >-
-  Build e testes com Maven (mvn verify) e publica o JAR como artifact do run.
+  Build e testes com Maven (mvn verify) e publica o JAR como artifact do run. A cobertura
+  (JaCoCo) é ligada pela esteira, sem depender do pom.xml do serviço: o relatório fica em
+  target/site/jacoco/jacoco.xml, que o Sonar lê.
 
 inputs:
   java-version:
@@ -9,6 +11,12 @@ inputs:
   maven-goals:
     description: Goals do Maven
     default: verify
+  coverage:
+    description: Mede a cobertura de testes com JaCoCo
+    default: 'true'
+  jacoco-version:
+    description: Versão do jacoco-maven-plugin
+    default: 0.8.16
   artifact-name:
     description: Nome do artifact com o JAR
     default: app-jar
@@ -26,8 +34,13 @@ runs:
       shell: bash
       env:
         GOALS: ${{ inputs.maven-goals }}
+        COVERAGE: ${{ inputs.coverage }}
+        JACOCO: org.jacoco:jacoco-maven-plugin:${{ inputs.jacoco-version }}
       run: |
         read -ra goals <<< "$GOALS"
+        if [ "$COVERAGE" = true ]; then
+          goals=("$JACOCO:prepare-agent" "${goals[@]}" "$JACOCO:report")
+        fi
         mvn -B -ntp "${goals[@]}"
 
     - uses: actions/upload-artifact@v4
