@@ -1,3 +1,5 @@
 # Falsos positivos revisados (formato: commit:arquivo:regra:linha).
-# curl -u "$SONAR_TOKEN:" usa a variável, não um segredo; trocado por header Bearer no commit seguinte.
+# Regra curl-auth-user: a autenticação básica do curl recebia a variável SONAR_TOKEN, não um
+# segredo. Trocada por header Bearer; a segunda linha é o comentário antigo deste arquivo.
 39ace38cbd6bbca827becf8de592035213febf28:actions/sonar/maven/action.yml:curl-auth-user:57
+3d92e974d899a6250bcd8c47035c95a2181144a6:.gitleaksignore:curl-auth-user:2
