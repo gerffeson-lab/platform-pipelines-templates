@@ -54,7 +54,7 @@ runs:
         HOST: ${{ inputs.host-url }}
         KEY: ${{ inputs.project-key }}
       run: |
-        curl -fsS -u "$SONAR_TOKEN:" -X POST "$HOST/api/autoscan/activation" \
+        curl -fsS -H "Authorization: Bearer $SONAR_TOKEN" -X POST "$HOST/api/autoscan/activation" \
           --data-urlencode "projectKey=$KEY" --data "enable=false" > /dev/null \
           || echo "::warning::Não foi possível desligar a análise automática de $KEY; se a análise falhar, desligue em Administration > Analysis Method."
 

@@ -1,0 +1,3 @@
+# Falsos positivos revisados (formato: commit:arquivo:regra:linha).
+# curl -u "$SONAR_TOKEN:" usa a variável, não um segredo; trocado por header Bearer no commit seguinte.
+39ace38cbd6bbca827becf8de592035213febf28:actions/sonar/maven/action.yml:curl-auth-user:57
