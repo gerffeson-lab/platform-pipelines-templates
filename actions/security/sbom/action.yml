@@ -1,22 +1,59 @@
 name: sbom
 description: >-
-  Gera o SBOM (CycloneDX) do repositório e publica como artifact do run.
-  No banco, este passo troca para a ferramenta de SCA/SBOM definida por Segurança.
+  Gera o SBOM (CycloneDX) com o Syft e publica como artifact do run. Para Java, aponte para o
+  JAR final: o Syft lê as dependências empacotadas, inclusive as transitivas. O SBOM também
+  é a entrada do SCA (actions/security/sca).
 
 inputs:
-  path:
-    description: Diretório analisado
+  target:
+    description: Arquivo (ex.:target/app.jar) ou diretório analisado. Aceita glob de um arquivo só
     default: .
-  artifact-name:
-    description: Nome do artifact do SBOM
+  output:
+    description: Onde gravar o SBOM
     default: sbom.cdx.json
+  artifact-name:
+    description: Nome do artifact do SBOM (vazio não publica)
+    default: sbom
+  retention-days:
+    description: Retenção do artifact
+    default: '90'
+  syft-version:
+    description: Tag da imagem anchore/syft
+    default: v1.55.0
+
+outputs:
+  path:
+    description: Caminho do SBOM gerado
+    value: ${{ inputs.output }}
 
 runs:
   using: composite
   steps:
-    - name: SBOM (CycloneDX)
-      uses: anchore/sbom-action@v0
+    - name: SBOM (Syft, CycloneDX)
+      shell: bash
+      env:
+        TARGET: ${{ inputs.target }}
+        OUTPUT: ${{ inputs.output }}
+        SYFT_VERSION: ${{ inputs.syft-version }}
+      run: |
+        shopt -s nullglob
+        alvos=($TARGET)
+        if [ "${#alvos[@]}" -ne 1 ]; then
+          echo "::error::target '$TARGET' precisa apontar para exatamente um arquivo ou diretório (achou ${#alvos[@]})."
+          exit 1
+        fi
+        alvo=$(realpath "${alvos[0]}")
+        if [ -d "$alvo" ]; then dir="$alvo"; fonte="dir:/in"; else dir=$(dirname "$alvo"); fonte="file:/in/$(basename "$alvo")"; fi
+        mkdir -p "$(dirname "$OUTPUT")"
+        out=$(realpath "$(dirname "$OUTPUT")")
+        # Ferramenta em container com versão fixa e sem token no ambiente
+        docker run --rm -v "$dir:/in:ro" -v "$out:/out" "anchore/syft:$SYFT_VERSION" \
+          scan "$fonte" -o "cyclonedx-json=/out/$(basename "$OUTPUT")" -q
+        echo "SBOM de ${alvos[0]}: $(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1])).get("components", [])))' "$OUTPUT") componentes." >> "$GITHUB_STEP_SUMMARY"
+
+    - if: inputs.artifact-name != ''
+      uses: actions/upload-artifact@v4
       with:
-        path: ${{ inputs.path }}
-        format: cyclonedx-json
-        artifact-name: ${{ inputs.artifact-name }}
+        name: ${{ inputs.artifact-name }}
+        path: ${{ inputs.output }}
+        retention-days: ${{ inputs.retention-days }}

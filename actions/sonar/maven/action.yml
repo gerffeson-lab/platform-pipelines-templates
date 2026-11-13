@@ -1,0 +1,85 @@
+name: sonar-maven
+description: >-
+  SAST e qualidade com SonarQube (no banco) ou SonarCloud (POC), pelo plugin do Maven.
+  Roda depois do build no mesmo job (usa as classes e o relatório do JaCoCo em target/) e
+  espera o quality gate: se reprovar, o job falha. Exige checkout com fetch-depth 0 (código
+  novo e blame).
+
+inputs:
+  token:
+    description: Token do Sonar
+    required: true
+  host-url:
+    description: Endereço do SonarQube ou SonarCloud
+    default: https://sonarcloud.io
+  organization:
+    description: Organização (só SonarCloud)
+    default: ''
+  project-key:
+    description: Chave do projeto
+    required: true
+  extra-args:
+    description: Parâmetros adicionais do scanner (-Dsonar.xxx=...)
+    default: ''
+  scanner-version:
+    description: Versão do sonar-maven-plugin
+    default: 5.8.0.7211
+
+runs:
+  using: composite
+  steps:
+    - name: Conferir configuração
+      shell: bash
+      env:
+        SONAR_TOKEN: ${{ inputs.token }}
+        HOST: ${{ inputs.host-url }}
+        ORG: ${{ inputs.organization }}
+      run: |
+        if [ -z "$SONAR_TOKEN" ]; then
+          echo "::error::SAST é obrigatório na esteira e o secret SONAR_TOKEN não está disponível. Configure o secret na org (e a variável SONAR_ORGANIZATION, no SonarCloud) e chame a esteira com 'secrets: inherit'."
+          exit 1
+        fi
+        if [[ "$HOST" == *sonarcloud.io* && -z "$ORG" ]]; then
+          echo "::error::No SonarCloud, a variável SONAR_ORGANIZATION é obrigatória."
+          exit 1
+        fi
+
+    # Só na POC (SonarCloud): a análise pelo CI não roda com a "Automatic Analysis" ligada no
+    # projeto, que é o padrão dos repositórios importados. No SonarQube do banco não existe.
+    - name: Desligar a análise automática do SonarCloud
+      if: contains(inputs.host-url, 'sonarcloud.io')
+      shell: bash
+      env:
+        SONAR_TOKEN: ${{ inputs.token }}
+        HOST: ${{ inputs.host-url }}
+        KEY: ${{ inputs.project-key }}
+      run: |
+        curl -fsS -u "$SONAR_TOKEN:" -X POST "$HOST/api/autoscan/activation" \
+          --data-urlencode "projectKey=$KEY" --data "enable=false" > /dev/null \
+          || echo "::warning::Não foi possível desligar a análise automática de $KEY; se a análise falhar, desligue em Administration > Analysis Method."
+
+    - name: Análise e quality gate (Sonar)
+      shell: bash
+      env:
+        SONAR_TOKEN: ${{ inputs.token }}
+        HOST: ${{ inputs.host-url }}
+        ORG: ${{ inputs.organization }}
+        KEY: ${{ inputs.project-key }}
+        EXTRA: ${{ inputs.extra-args }}
+        VERSION: ${{ inputs.scanner-version }}
+      run: |
+        # código gerado (ex.: interfaces do OpenAPI) não entra na análise nem na cobertura
+        args=(
+          "-Dsonar.host.url=$HOST"
+          "-Dsonar.projectKey=$KEY"
+          -Dsonar.qualitygate.wait=true
+          -Dsonar.qualitygate.timeout=300
+          "-Dsonar.exclusions=**/generated-sources/**"
+        )
+        if [ -n "$ORG" ]; then args+=("-Dsonar.organization=$ORG"); fi
+        read -ra extra <<< "$EXTRA"
+        mvn -B -ntp "org.sonarsource.scanner.maven:sonar-maven-plugin:$VERSION:sonar" "${args[@]}" "${extra[@]}"
+        {
+          echo "### SAST (Sonar)"
+          echo "Quality gate aprovado: $HOST/dashboard?id=$KEY"
+        } >> "$GITHUB_STEP_SUMMARY"

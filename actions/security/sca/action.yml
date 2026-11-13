@@ -1,0 +1,72 @@
+name: sca
+description: >-
+  SCA com o Grype: procura vulnerabilidades conhecidas num SBOM ou numa imagem salva
+  (docker save). Publica o relatório completo no resumo do run e falha quando há
+  vulnerabilidade na severidade mínima (ou acima) que já tem correção. Vulnerabilidades sem
+  correção aparecem no relatório, mas não bloqueiam.
+
+inputs:
+  target:
+    description: Arquivo analisado (SBOM CycloneDX ou tar do docker save)
+    required: true
+  type:
+    description: sbom | docker-archive
+    default: sbom
+  fail-on:
+    description: >-
+      Severidade mínima que bloqueia (negligible, low, medium, high, critical). Com "none",
+      só relata e gera alerta, sem bloquear
+    default: high
+  only-fixed:
+    description: Bloqueia só vulnerabilidades com correção disponível
+    default: 'true'
+  grype-version:
+    description: Tag da imagem anchore/grype
+    default: v0.121.0
+
+runs:
+  using: composite
+  steps:
+    - name: SCA (Grype)
+      shell: bash
+      env:
+        TARGET: ${{ inputs.target }}
+        TYPE: ${{ inputs.type }}
+        FAIL_ON: ${{ inputs.fail-on }}
+        ONLY_FIXED: ${{ inputs.only-fixed }}
+        GRYPE_VERSION: ${{ inputs.grype-version }}
+      run: |
+        if [ "$FAIL_ON" = none ]; then GATE=report; GATE_SEV=high; else GATE=block; GATE_SEV=$FAIL_ON; fi
+        case "$TYPE" in sbom|docker-archive) ;; *) echo "::error::type inválido: $TYPE"; exit 1;; esac
+        alvo=$(realpath "$TARGET")
+        db="$RUNNER_TEMP/grype-db"
+        mkdir -p "$db"
+        grype() {
+          docker run --rm -e GRYPE_DB_CACHE_DIR=/db -v "$db:/db" -v "$(dirname "$alvo"):/in:ro" \
+            "anchore/grype:$GRYPE_VERSION" "$TYPE:/in/$(basename "$alvo")" "$@"
+        }
+
+        relatorio=$(grype -o table -q || true)
+        {
+          echo "### SCA: $TARGET"
+          if [ "$GATE" = block ]; then
+            echo "Bloqueia: severidade **$FAIL_ON** ou maior$([ "$ONLY_FIXED" = true ] && echo ' com correção disponível')."
+          else
+            echo "Só relatório (não bloqueia)."
+          fi
+          echo '```'
+          echo "${relatorio:-Nenhuma vulnerabilidade encontrada.}"
+          echo '```'
+        } >> "$GITHUB_STEP_SUMMARY"
+        echo "$relatorio"
+
+        args=(--fail-on "$GATE_SEV" -o table -q)
+        if [ "$ONLY_FIXED" = true ]; then args+=(--only-fixed); fi
+        if ! grype "${args[@]}" > /dev/null; then
+          if [ "$GATE" = report ]; then
+            echo "::warning::Vulnerabilidade $GATE_SEV ou maior com correção disponível em $TARGET (só relatório). Veja o resumo do run."
+            exit 0
+          fi
+          echo "::error::Vulnerabilidade $FAIL_ON ou maior com correção disponível em $TARGET. Atualize a dependência (veja a coluna FIXED IN no resumo do run)."
+          exit 1
+        fi
