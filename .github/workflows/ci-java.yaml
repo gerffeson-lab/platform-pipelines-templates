@@ -5,7 +5,11 @@
 #   jobs:
 #     ci:
 #       uses: gerffeson-lab/platform-pipelines-templates/.github/workflows/ci-java.yaml@v1
-#       secrets: inherit   # no banco: credenciais do Nexus e do Quay
+#       secrets: inherit   # GITOPS_DEPLOY_KEY (e, no banco, credenciais do Nexus e do Quay)
+#
+# Deploy (GitOps): em push para develop, release/* e main, renderiza o chart da plataforma
+# com deploy/values*.yaml do serviço e grava no repo GitOps, na branch do ambiente.
+# Precisa na org: secret GITOPS_DEPLOY_KEY (deploy key com escrita só no repo GitOps).
 #
 # SAST no Sonar é opcional (entrada `sonar`, desligada) até o banco definir a ferramenta.
 # Ligado, precisa na org: secret SONAR_TOKEN, variáveis SONAR_HOST_URL e SONAR_ORGANIZATION.
@@ -29,6 +33,10 @@ on:
         description: Publica a imagem em push para develop, release/*, main e tags
         type: boolean
         default: true
+      deploy:
+        description: Grava os manifestos no repo GitOps depois de publicar a imagem
+        type: boolean
+        default: true
       sonar:
         description: Liga o SAST no Sonar (SonarQube/SonarCloud), esperando o quality gate
         type: boolean
@@ -38,6 +46,9 @@ on:
         type: string
         default: ''
     secrets:
+      GITOPS_DEPLOY_KEY:
+        description: Deploy key com escrita no repo GitOps
+        required: false
       SONAR_TOKEN:
         description: Token do Sonar (só com sonar ligado)
         required: false
@@ -128,5 +139,32 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-  # Fase 2 (CD): renderizar o Helm (helm-library) com os values do serviço e commitar no
-  # repo GitOps do produto; o Argo CD sincroniza.
+  deploy:
+    name: deploy (GitOps)
+    needs: image
+    if: >-
+      inputs.deploy && github.event_name == 'push' &&
+      (github.ref == 'refs/heads/develop' || github.ref == 'refs/heads/main' ||
+      startsWith(github.ref, 'refs/heads/release/'))
+    runs-on: ubuntu-latest
+    concurrency:
+      group: deploy-${{ github.repository }}-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - name: Confere a deploy key
+        env:
+          KEY: ${{ secrets.GITOPS_DEPLOY_KEY }}
+        run: |
+          if [ -z "$KEY" ]; then
+            echo "::error::falta o secret GITOPS_DEPLOY_KEY na org (deploy key com escrita no repo GitOps) e secrets: inherit no ci.yaml do serviço"
+            exit 1
+          fi
+      - uses: actions/checkout@v4
+      # mesma tag que o job de imagem publicou (docker/metadata-action: type=sha, 7 caracteres)
+      - id: tag
+        run: echo "sha=sha-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+      - uses: gerffeson-lab/platform-pipelines-templates/actions/gitops/deploy@v1
+        with:
+          image-repository: ghcr.io/${{ github.repository }}
+          image-tag: ${{ steps.tag.outputs.sha }}
+          ssh-key: ${{ secrets.GITOPS_DEPLOY_KEY }}

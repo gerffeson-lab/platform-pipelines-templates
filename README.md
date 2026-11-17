@@ -32,6 +32,7 @@ actions/
   sonar/maven                  # SAST + quality gate (SonarQube/SonarCloud), opcional
   java/maven-build             # mvn verify + JAR como artifact
   container/build-push         # build, scan da imagem, tags por branch/semver/sha e push
+  gitops/deploy                # render do chart da plataforma + commit no repo GitOps
   release/next-version         # versão semântica por Conventional Commits
 ```
 
@@ -47,9 +48,30 @@ actions/
 | | sempre | **SBOM** CycloneDX do JAR final (artifact `sbom`, 90 dias) | — |
 | SCA | sempre | **Grype** sobre o SBOM: severidade alta ou maior com correção disponível | sim |
 | imagem | push em develop, release/*, main e tags | Build, **scan da imagem** (Grype) e push para o registry | scan só relata (veja abaixo) |
+| deploy (GitOps) | push em develop, release/*, main | Renderiza o chart da plataforma com `deploy/values*.yaml` e grava no repo GitOps, na branch do ambiente | sim |
 
 Entradas: `java-version` (padrão `21`), `openapi-path` (padrão `api/openapi.yaml`),
-`publish-image` (padrão `true`), `sonar` (padrão `false`), `sonar-project-key` (padrão `<dono>_<repositório>`).
+`publish-image` (padrão `true`), `deploy` (padrão `true`), `sonar` (padrão `false`), `sonar-project-key` (padrão `<dono>_<repositório>`).
+
+### Deploy (GitOps)
+
+| Branch do serviço | Ambiente | Branch no repo GitOps |
+|---|---|---|
+| `develop` | dev | `develop` |
+| `release/*` | hml | `release` |
+| `main` | prd | `main` |
+
+O job renderiza o chart `app` de
+[platform-helm-charts](https://github.com/gerffeson-lab/platform-helm-charts) com
+`deploy/values.yaml` + `deploy/values-<ambiente>.yaml` do serviço. A esteira injeta o nome
+(nome do repo), a sigla e o produto (custom properties do repo), o ambiente e a imagem que
+acabou de publicar. O resultado substitui a pasta `manifests/<sigla>-<produto>/<serviço>/`
+em [platform-gitops](https://github.com/gerffeson-lab/platform-gitops), e o Argo CD
+sincroniza.
+
+Precisa na org do secret `GITOPS_DEPLOY_KEY`: uma deploy key com escrita **só** no repo
+GitOps. No banco, o melhor é um GitHub App dedicado, instalado só no repo GitOps e com
+tokens de curta duração.
 
 ### SAST: opcional até o banco definir a ferramenta
 
