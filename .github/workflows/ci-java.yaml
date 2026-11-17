@@ -5,12 +5,10 @@
 #   jobs:
 #     ci:
 #       uses: gerffeson-lab/platform-pipelines-templates/.github/workflows/ci-java.yaml@v1
-#       secrets: inherit   # SONAR_TOKEN (e, no banco, credenciais do Nexus e do Quay)
+#       secrets: inherit   # no banco: credenciais do Nexus e do Quay
 #
-# Configuração da org (não do serviço):
-#   secret   SONAR_TOKEN          token do SonarQube/SonarCloud
-#   variável SONAR_HOST_URL       padrão https://sonarcloud.io
-#   variável SONAR_ORGANIZATION   só no SonarCloud
+# SAST no Sonar é opcional (entrada `sonar`, desligada) até o banco definir a ferramenta.
+# Ligado, precisa na org: secret SONAR_TOKEN, variáveis SONAR_HOST_URL e SONAR_ORGANIZATION.
 #
 # As actions são referenciadas pela tag de major (@v1), que o release move junto.
 # Numa versão v2, atualizar estas referências para @v2.
@@ -31,13 +29,17 @@ on:
         description: Publica a imagem em push para develop, release/*, main e tags
         type: boolean
         default: true
+      sonar:
+        description: Liga o SAST no Sonar (SonarQube/SonarCloud), esperando o quality gate
+        type: boolean
+        default: false
       sonar-project-key:
         description: Chave do projeto no Sonar. Vazio usa <dono>_<repositório> (padrão do SonarCloud)
         type: string
         default: ''
     secrets:
       SONAR_TOKEN:
-        description: Token do Sonar (SAST obrigatório)
+        description: Token do Sonar (só com sonar ligado)
         required: false
 
 permissions:
@@ -70,18 +72,19 @@ jobs:
       - uses: gerffeson-lab/platform-pipelines-templates/actions/security/secret-scan@v1
 
   build:
-    name: build, testes e SAST
+    name: build e testes
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # o Sonar usa o histórico para saber o que é código novo
+          fetch-depth: 0 # o Sonar (se ligado) usa o histórico para saber o que é código novo
 
       - uses: gerffeson-lab/platform-pipelines-templates/actions/java/maven-build@v1
         with:
           java-version: ${{ inputs.java-version }}
 
-      - uses: gerffeson-lab/platform-pipelines-templates/actions/sonar/maven@v1
+      - if: inputs.sonar
+        uses: gerffeson-lab/platform-pipelines-templates/actions/sonar/maven@v1
         with:
           token: ${{ secrets.SONAR_TOKEN }}
           host-url: ${{ vars.SONAR_HOST_URL || 'https://sonarcloud.io' }}
