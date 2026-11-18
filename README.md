@@ -69,9 +69,11 @@ acabou de publicar. O resultado substitui a pasta `manifests/<sigla>-<produto>/<
 em [platform-gitops](https://github.com/gerffeson-lab/platform-gitops), e o Argo CD
 sincroniza.
 
-Precisa na org do secret `GITOPS_DEPLOY_KEY`: uma deploy key com escrita **só** no repo
-GitOps. No banco, o melhor é um GitHub App dedicado, instalado só no repo GitOps e com
-tokens de curta duração.
+Escreve com um **GitHub App dedicado**, instalado só no repo GitOps e só com
+`Contents: read and write`. A cada deploy a esteira gera um token de 1 hora limitado a esse
+repo. Na org: variável `GITOPS_APP_ID` e secret `GITOPS_APP_PRIVATE_KEY`. Não é o App do
+self-service: aquele cria repositórios e não pode ter a chave espalhada pelos serviços.
+Deploy key não serve: costuma vir desligada por política em orgs Enterprise/EMU.
 
 ### SAST: opcional até o banco definir a ferramenta
 
