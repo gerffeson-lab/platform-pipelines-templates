@@ -29,9 +29,10 @@ actions/
   security/secret-scan         # Gitleaks
   security/sbom                # Syft, CycloneDX
   security/sca                 # Grype sobre o SBOM ou a imagem
-  sonar/maven                  # SAST + quality gate (SonarQube/SonarCloud)
+  sonar/maven                  # SAST + quality gate (SonarQube/SonarCloud), opcional
   java/maven-build             # mvn verify + JAR como artifact
   container/build-push         # build, scan da imagem, tags por branch/semver/sha e push
+  gitops/deploy                # render do chart da plataforma + commit no repo GitOps
   release/next-version         # versão semântica por Conventional Commits
 ```
 
@@ -42,25 +43,51 @@ actions/
 | contrato OpenAPI | sempre | Lint com Redocly (`redocly.yaml` do serviço ou o padrão da plataforma) | sim |
 | | PR | Breaking change contra a branch de destino (oasdiff) | sim |
 | secret scanning | sempre | Gitleaks no histórico | sim |
-| build, testes e SAST | sempre | `mvn verify` com cobertura (JaCoCo, ligado pela esteira) | sim |
-| | sempre | **SAST** no Sonar, esperando o quality gate | sim |
+| build e testes | sempre | `mvn verify` com cobertura (JaCoCo, ligado pela esteira) | sim |
+| | `sonar: true` | **SAST** no Sonar, esperando o quality gate | sim |
 | | sempre | **SBOM** CycloneDX do JAR final (artifact `sbom`, 90 dias) | — |
 | SCA | sempre | **Grype** sobre o SBOM: severidade alta ou maior com correção disponível | sim |
 | imagem | push em develop, release/*, main e tags | Build, **scan da imagem** (Grype) e push para o registry | scan só relata (veja abaixo) |
+| deploy (GitOps) | push em develop, release/*, main | Renderiza o chart da plataforma com `deploy/values*.yaml` e grava no repo GitOps, na branch do ambiente | sim |
 
 Entradas: `java-version` (padrão `21`), `openapi-path` (padrão `api/openapi.yaml`),
-`publish-image` (padrão `true`), `sonar-project-key` (padrão `<dono>_<repositório>`).
+`publish-image` (padrão `true`), `deploy` (padrão `true`), `sonar` (padrão `false`), `sonar-project-key` (padrão `<dono>_<repositório>`).
 
-### Configuração (na org, não no serviço)
+### Deploy (GitOps)
+
+| Branch do serviço | Ambiente | Branch no repo GitOps |
+|---|---|---|
+| `develop` | dev | `develop` |
+| `release/*` | hml | `release` |
+| `main` | prd | `main` |
+
+O job renderiza o chart `app` de
+[platform-helm-charts](https://github.com/gerffeson-lab/platform-helm-charts) com
+`deploy/values.yaml` + `deploy/values-<ambiente>.yaml` do serviço. A esteira injeta o nome
+(nome do repo), a sigla e o produto (custom properties do repo), o ambiente e a imagem que
+acabou de publicar. O resultado substitui a pasta `manifests/<sigla>-<produto>/<serviço>/`
+em [platform-gitops](https://github.com/gerffeson-lab/platform-gitops), e o Argo CD
+sincroniza.
+
+Precisa na org do secret `GITOPS_DEPLOY_KEY`: uma deploy key com escrita **só** no repo
+GitOps. No banco, o melhor é um GitHub App dedicado, instalado só no repo GitOps e com
+tokens de curta duração.
+
+### SAST: opcional até o banco definir a ferramenta
+
+O banco ainda não tem SonarQube e a ferramenta de análise de código está em aberto
+(SonarQube, SonarQube Cloud ou GHAS/CodeQL). Por isso o Sonar vem **desligado**: o serviço
+liga com `sonar: true`, e aí a org precisa de:
 
 | Tipo | Nome | Valor |
 |---|---|---|
-| Secret | `SONAR_TOKEN` | Token do SonarQube/SonarCloud. **Obrigatório**: sem ele o build falha |
+| Secret | `SONAR_TOKEN` | Token do SonarQube/SonarCloud (sem ele, com `sonar: true`, o build falha) |
 | Variável | `SONAR_HOST_URL` | Padrão `https://sonarcloud.io` |
 | Variável | `SONAR_ORGANIZATION` | Só no SonarCloud |
 
 O serviço chama a esteira com `secrets: inherit`. As regras do quality gate (ex.: cobertura
-em código novo) ficam no Sonar, não no repositório do serviço.
+em código novo) ficam no Sonar, não no repositório do serviço. Quando a ferramenta for
+definida, ela passa a ser ligada por padrão para todos.
 
 ### Por que o scan da imagem ainda não bloqueia
 
@@ -123,6 +150,6 @@ jobs:
 | Actions públicas referenciadas direto | Allowlist do Enterprise ou espelho interno das actions de terceiros |
 | Dependências direto do Maven Central | Nexus (proxy do Central e libs internas) |
 | Grype (SCA e imagem), Syft (SBOM) | Os mesmos, ou a ferramenta definida por Segurança (ex.: Tenable) |
-| SonarCloud | SonarQube quality gate |
+| SonarCloud, desligado por padrão | Ferramenta de SAST a definir (SonarQube, SonarQube Cloud ou GHAS/CodeQL) |
 | Imagem base UBI pública | Imagem base curada pela plataforma, com scan bloqueante |
 | `ci.yaml` copiado do template | Required workflow via ruleset da org: o CI roda mesmo se o time removê-lo |

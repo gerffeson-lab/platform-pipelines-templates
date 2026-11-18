@@ -135,3 +135,31 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: bash tests/release/next-version.test.sh
+
+  gitops-deploy:
+    name: action de deploy GitOps (só render)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: renderiza com os values de um serviço, ambiente prd
+        id: render
+        uses: ./actions/gitops/deploy
+        with:
+          image-repository: ghcr.io/gerffeson-lab/exemplo
+          image-tag: sha-abc1234
+          environment: prd
+          values-dir: tests/fixtures/deploy
+          sigla: crt
+          produto: credito
+      - name: confere o destino e o conteúdo
+        env:
+          DEST: ${{ steps.render.outputs.path }}
+          DIR: ${{ steps.render.outputs.rendered }}
+        run: |
+          test "$DEST" = "manifests/crt-credito/platform-pipelines-templates"
+          ls "$DIR"
+          for f in deployment service serviceaccount pdb; do test -f "$DIR/$f.yaml"; done
+          grep -q "replicas: 2" "$DIR/deployment.yaml"            # values-prd.yaml aplicado
+          grep -q "image: \"ghcr.io/gerffeson-lab/exemplo:sha-abc1234\"" "$DIR/deployment.yaml"
+          grep -q "deployment.environment=prd" "$DIR/deployment.yaml"
+          grep -A1 "SPRING_APPLICATION_NAME" "$DIR/deployment.yaml" | grep -q '"platform-pipelines-templates"'

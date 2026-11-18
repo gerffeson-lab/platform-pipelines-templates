@@ -1,0 +1,188 @@
+name: gitops-deploy
+description: >-
+  Renderiza o chart de aplicação da plataforma com os values do serviço (deploy/) e grava os
+  manifestos no repo GitOps, na branch do ambiente, em manifests/<sigla>-<produto>/<serviço>/.
+  O Argo CD sincroniza a partir dali. Nome, produto, ambiente e imagem vêm da plataforma:
+  o time só escreve os values.
+
+inputs:
+  image-repository:
+    description: Repositório da imagem (sem tag)
+    required: true
+  image-tag:
+    description: Tag da imagem que a esteira acabou de publicar
+    required: true
+  environment:
+    description: dev, hml ou prd. Vazio deduz da branch (develop, release/*, main)
+    default: ''
+  values-dir:
+    description: Pasta dos values do serviço
+    default: deploy
+  sigla:
+    description: Vazio lê a custom property `sigla` do repositório
+    default: ''
+  produto:
+    description: Vazio lê a custom property `produto` do repositório
+    default: ''
+  chart-repository:
+    description: Repositório dos charts da plataforma
+    default: gerffeson-lab/platform-helm-charts
+  chart-ref:
+    description: Versão do chart (tag)
+    default: v1
+  gitops-repository:
+    description: Repositório GitOps dos manifestos
+    default: gerffeson-lab/platform-gitops
+  ssh-key:
+    description: Deploy key com escrita no repo GitOps. Vazio só renderiza (não grava)
+    default: ''
+  github-token:
+    description: Token para ler as custom properties do repositório
+    default: ${{ github.token }}
+  helm-version:
+    description: Versão do Helm
+    default: v3.19.0
+
+outputs:
+  path:
+    description: Pasta dos manifestos no repo GitOps
+    value: ${{ steps.alvo.outputs.path }}
+  rendered:
+    description: Pasta local com os manifestos renderizados
+    value: ${{ steps.render.outputs.dir }}
+
+runs:
+  using: composite
+  steps:
+    - name: Ambiente e destino
+      id: alvo
+      shell: bash
+      env:
+        ENVIRONMENT: ${{ inputs.environment }}
+        SIGLA: ${{ inputs.sigla }}
+        PRODUTO: ${{ inputs.produto }}
+        GH_TOKEN: ${{ inputs.github-token }}
+      run: |
+        if [ -z "$ENVIRONMENT" ]; then
+          case "$GITHUB_REF" in
+            refs/heads/develop)    ENVIRONMENT=dev ;;
+            refs/heads/release/*)  ENVIRONMENT=hml ;;
+            refs/heads/main)       ENVIRONMENT=prd ;;
+            *) echo "::error::$GITHUB_REF não é branch de deploy (develop, release/*, main)"; exit 1 ;;
+          esac
+        fi
+        case "$ENVIRONMENT" in
+          dev) BRANCH=develop ;;
+          hml) BRANCH=release ;;
+          prd) BRANCH=main ;;
+          *) echo "::error::ambiente '$ENVIRONMENT' inválido (dev, hml, prd)"; exit 1 ;;
+        esac
+        if [ -z "$SIGLA" ] || [ -z "$PRODUTO" ]; then
+          props=$(gh api "repos/$GITHUB_REPOSITORY/properties/values")
+          SIGLA=${SIGLA:-$(jq -r '.[] | select(.property_name=="sigla") | .value // empty' <<<"$props")}
+          PRODUTO=${PRODUTO:-$(jq -r '.[] | select(.property_name=="produto") | .value // empty' <<<"$props")}
+        fi
+        if [ -z "$SIGLA" ] || [ -z "$PRODUTO" ]; then
+          echo "::error::o repositório não tem as custom properties sigla e produto (repositórios criados pelo self-service já têm)"
+          exit 1
+        fi
+        SERVICO="${GITHUB_REPOSITORY#*/}"
+        {
+          echo "environment=$ENVIRONMENT"
+          echo "branch=$BRANCH"
+          echo "sigla=$SIGLA"
+          echo "product=$SIGLA-$PRODUTO"
+          echo "service=$SERVICO"
+          echo "path=manifests/$SIGLA-$PRODUTO/$SERVICO"
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Chart da plataforma
+      uses: actions/checkout@v4
+      with:
+        repository: ${{ inputs.chart-repository }}
+        ref: ${{ inputs.chart-ref }}
+        path: .platform/charts
+
+    - uses: azure/setup-helm@v4
+      with:
+        version: ${{ inputs.helm-version }}
+
+    - name: Renderiza
+      id: render
+      shell: bash
+      env:
+        VALUES_DIR: ${{ inputs.values-dir }}
+        ENVIRONMENT: ${{ steps.alvo.outputs.environment }}
+        SIGLA: ${{ steps.alvo.outputs.sigla }}
+        PRODUCT: ${{ steps.alvo.outputs.product }}
+        SERVICE: ${{ steps.alvo.outputs.service }}
+        IMAGE_REPOSITORY: ${{ inputs.image-repository }}
+        IMAGE_TAG: ${{ inputs.image-tag }}
+      run: |
+        if [ ! -f "$VALUES_DIR/values.yaml" ]; then
+          echo "::error::faltou $VALUES_DIR/values.yaml no serviço (o boilerplate já traz)"; exit 1
+        fi
+        args=(-f "$VALUES_DIR/values.yaml")
+        [ -f "$VALUES_DIR/values-$ENVIRONMENT.yaml" ] && args+=(-f "$VALUES_DIR/values-$ENVIRONMENT.yaml")
+        out="$RUNNER_TEMP/render"
+        rm -rf "$out"
+        helm template "$SERVICE" .platform/charts/charts/app "${args[@]}" \
+          --set-string platform.name="$SERVICE" \
+          --set-string platform.sigla="$SIGLA" \
+          --set-string platform.product="$PRODUCT" \
+          --set-string platform.environment="$ENVIRONMENT" \
+          --set-string image.repository="$IMAGE_REPOSITORY" \
+          --set-string image.tag="$IMAGE_TAG" \
+          --output-dir "$out"
+        mv "$out/app/templates" "$out/manifests"
+        echo "dir=$out/manifests" >> "$GITHUB_OUTPUT"
+        {
+          echo "### Deploy: $SERVICE em $ENVIRONMENT"
+          echo
+          echo "Imagem \`$IMAGE_REPOSITORY:$IMAGE_TAG\`, values: ${args[*]}"
+          echo
+          echo '```'
+          (cd "$out/manifests" && ls -1)
+          echo '```'
+        } >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Repo GitOps
+      if: inputs.ssh-key != ''
+      uses: actions/checkout@v4
+      with:
+        repository: ${{ inputs.gitops-repository }}
+        ref: ${{ steps.alvo.outputs.branch }}
+        ssh-key: ${{ inputs.ssh-key }}
+        path: .platform/gitops
+
+    - name: Grava os manifestos
+      if: inputs.ssh-key != ''
+      shell: bash
+      working-directory: .platform/gitops
+      env:
+        DEST: ${{ steps.alvo.outputs.path }}
+        SRC: ${{ steps.render.outputs.dir }}
+        BRANCH: ${{ steps.alvo.outputs.branch }}
+        ENVIRONMENT: ${{ steps.alvo.outputs.environment }}
+        SERVICE: ${{ steps.alvo.outputs.service }}
+        IMAGE_TAG: ${{ inputs.image-tag }}
+      run: |
+        # substitui a pasta inteira: o que saiu do chart também sai do cluster
+        rm -rf "$DEST" && mkdir -p "$DEST" && cp "$SRC"/*.yaml "$DEST"/
+        git add -A "$DEST"
+        if git diff --cached --quiet; then
+          echo "Manifestos iguais aos do ambiente; nada a gravar."; exit 0
+        fi
+        git config user.name "plataforma-esteira"
+        git config user.email "esteira@plataforma.invalid"
+        git commit -q -m "chore(deploy): $SERVICE $IMAGE_TAG em $ENVIRONMENT" \
+          -m "Origem: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/commit/$GITHUB_SHA" \
+          -m "Execução: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+        # vários serviços gravam no mesmo repo: em conflito, rebase e tenta de novo
+        for tentativa in 1 2 3 4 5; do
+          git push -q origin "HEAD:$BRANCH" && { echo "Gravado em $BRANCH:$DEST"; exit 0; }
+          echo "Push recusado (tentativa $tentativa); atualizando e tentando de novo"
+          sleep $((tentativa * 2))
+          git pull -q --rebase origin "$BRANCH"
+        done
+        echo "::error::não consegui gravar no repo GitOps depois de 5 tentativas"; exit 1
