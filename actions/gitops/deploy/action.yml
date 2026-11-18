@@ -33,8 +33,11 @@ inputs:
   gitops-repository:
     description: Repositório GitOps dos manifestos
     default: gerffeson-lab/platform-gitops
-  ssh-key:
-    description: Deploy key com escrita no repo GitOps. Vazio só renderiza (não grava)
+  app-id:
+    description: ID do GitHub App que escreve no repo GitOps. Vazio só renderiza (não grava)
+    default: ''
+  app-private-key:
+    description: Chave privada desse GitHub App
     default: ''
   github-token:
     description: Token para ler as custom properties do repositório
@@ -61,6 +64,7 @@ runs:
         ENVIRONMENT: ${{ inputs.environment }}
         SIGLA: ${{ inputs.sigla }}
         PRODUTO: ${{ inputs.produto }}
+        GITOPS_REPO: ${{ inputs.gitops-repository }}
         GH_TOKEN: ${{ inputs.github-token }}
       run: |
         if [ -z "$ENVIRONMENT" ]; then
@@ -94,6 +98,8 @@ runs:
           echo "product=$SIGLA-$PRODUTO"
           echo "service=$SERVICO"
           echo "path=manifests/$SIGLA-$PRODUTO/$SERVICO"
+          echo "gitops-owner=${GITOPS_REPO%%/*}"
+          echo "gitops-name=${GITOPS_REPO#*/}"
         } >> "$GITHUB_OUTPUT"
 
     - name: Chart da plataforma
@@ -146,17 +152,29 @@ runs:
           echo '```'
         } >> "$GITHUB_STEP_SUMMARY"
 
+    # token de curta duração (1 h), válido só no repo GitOps e só para conteúdo
+    - name: Token do repo GitOps
+      id: token
+      if: inputs.app-id != ''
+      uses: actions/create-github-app-token@v2
+      with:
+        app-id: ${{ inputs.app-id }}
+        private-key: ${{ inputs.app-private-key }}
+        owner: ${{ steps.alvo.outputs.gitops-owner }}
+        repositories: ${{ steps.alvo.outputs.gitops-name }}
+        permission-contents: write
+
     - name: Repo GitOps
-      if: inputs.ssh-key != ''
+      if: inputs.app-id != ''
       uses: actions/checkout@v4
       with:
         repository: ${{ inputs.gitops-repository }}
         ref: ${{ steps.alvo.outputs.branch }}
-        ssh-key: ${{ inputs.ssh-key }}
+        token: ${{ steps.token.outputs.token }}
         path: .platform/gitops
 
     - name: Grava os manifestos
-      if: inputs.ssh-key != ''
+      if: inputs.app-id != ''
       shell: bash
       working-directory: .platform/gitops
       env:
@@ -166,6 +184,7 @@ runs:
         ENVIRONMENT: ${{ steps.alvo.outputs.environment }}
         SERVICE: ${{ steps.alvo.outputs.service }}
         IMAGE_TAG: ${{ inputs.image-tag }}
+        APP_SLUG: ${{ steps.token.outputs.app-slug }}
       run: |
         # substitui a pasta inteira: o que saiu do chart também sai do cluster
         rm -rf "$DEST" && mkdir -p "$DEST" && cp "$SRC"/*.yaml "$DEST"/
@@ -173,8 +192,8 @@ runs:
         if git diff --cached --quiet; then
           echo "Manifestos iguais aos do ambiente; nada a gravar."; exit 0
         fi
-        git config user.name "plataforma-esteira"
-        git config user.email "esteira@plataforma.invalid"
+        git config user.name "$APP_SLUG[bot]"
+        git config user.email "$APP_SLUG[bot]@users.noreply.github.com"
         git commit -q -m "chore(deploy): $SERVICE $IMAGE_TAG em $ENVIRONMENT" \
           -m "Origem: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/commit/$GITHUB_SHA" \
           -m "Execução: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
